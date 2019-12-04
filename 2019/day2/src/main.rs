@@ -1,12 +1,30 @@
 fn main() {
     let input_mem = include_str!("input.txt");
-    let mut memory = input_mem.split(',')
+    let memory = input_mem.split(',')
         .map(|x| x.parse::<i32>().unwrap())
         .collect::<Vec<_>>();
 
-    memory[1] = 12;
-    memory[2] = 2;
+    {
+        let mut memory_1202 = memory.to_vec();
+        memory_1202[1] = 12;
+        memory_1202[2] = 2;
+        execute(&mut memory_1202);
+        println!("Repaired value: {}", memory_1202[0]);
+    }
+    for noun in 0..=99 {
+        for verb in 0..=99 {
+            let mut memory_nv = memory.to_vec();
+            memory_nv[1] = noun;
+            memory_nv[2] = verb;
+            execute(&mut memory_nv);
+            if memory_nv[0] == 19690720 {
+                println!("100 * {} + {} = {}", noun, verb, 100 * noun + verb);
+            }
+        }
+    }
+}
 
+fn execute(memory:&mut [i32]) {
     for pc in (0..memory.len()).step_by(4) {
         let opcode = memory[pc];
         if opcode == 99 {
@@ -28,11 +46,10 @@ fn main() {
             panic!("unrecognised opcode {} at address {}", opcode, pc);
         }
     }
-
-    dump(&memory);
 }
 
-fn dump(mem:&Vec<i32>) {
+#[allow(dead_code)]
+fn dump(mem:&[i32]) {
     let mut i = 0;
     for memory_value in mem {
         if i == 0 {
