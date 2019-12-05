@@ -47,6 +47,8 @@ fn has_doubles(val: &u32) -> bool {
     false
 }
 
+// Not a general-purpose function;
+// only works when numbers are in distinct groups like we get with the increase-only permutation
 fn has_doubles_exact(val: &u32) -> bool {
     let mut tmp = *val;
     let mut counts: [u32; 10] = [0; 10];
