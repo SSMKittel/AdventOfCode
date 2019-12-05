@@ -2,9 +2,15 @@ fn main() {
     let min = 372037u32;
     let max = 905157u32;
 
-    let mut data = permute_increasing(6, min, max);
-    data.retain(has_doubles);
-    println!("Count with doubles {}", data.len());
+    let data = permute_increasing(6, min, max);
+
+    let mut data_simple = data.to_vec();
+    data_simple.retain(has_doubles);
+    println!("Count with doubles {}", data_simple.len());
+
+    let mut data_exact = data.to_vec();
+    data_exact.retain(has_doubles_exact);
+    println!("Count with doubles (exact) {}", data_exact.len());
 }
 
 fn permute_increasing(digits: u32, min: u32, max: u32) -> Vec<u32> {
@@ -39,4 +45,14 @@ fn has_doubles(val: &u32) -> bool {
         tmp /= 10;
     }
     false
+}
+
+fn has_doubles_exact(val: &u32) -> bool {
+    let mut tmp = *val;
+    let mut counts: [u32; 10] = [0; 10];
+    while tmp > 0 {
+        counts[(tmp % 10) as usize] += 1;
+        tmp /= 10;
+    }
+    counts.contains(&2u32)
 }
