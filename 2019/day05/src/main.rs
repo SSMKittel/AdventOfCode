@@ -142,60 +142,70 @@ impl Operation {
 
     fn decode(memory: &[i32], pc: usize) -> Operation {
         let full_opcode = memory[pc];
-        match full_opcode {
-            00001 => Add(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            00101 => Add(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            01001 => Add(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            01101 => Add(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            10001 => Add(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            10101 => Add(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            11001 => Add(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-            11101 => Add(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-
-            00002 => Multiply(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            00102 => Multiply(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            01002 => Multiply(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            01102 => Multiply(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            10002 => Multiply(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            10102 => Multiply(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            11002 => Multiply(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-            11102 => Multiply(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-
-            003 => Input(Immediate(memory[pc + 1])),
-            103 => Input(Position (memory[pc + 1] as usize)),
-
-            004 => Output(Position (memory[pc + 1] as usize)),
-            104 => Output(Immediate(memory[pc + 1])),
-
-            0005 => JumpIfTrue(Position (memory[pc + 1] as usize), Position(memory[pc + 2] as usize)),
-            0105 => JumpIfTrue(Immediate(memory[pc + 1]), Position(memory[pc + 2] as usize)),
-            1005 => JumpIfTrue(Position (memory[pc + 1] as usize), Immediate (memory[pc + 2])),
-            1105 => JumpIfTrue(Immediate(memory[pc + 1]), Immediate (memory[pc + 2])),
-
-            0006 => JumpIfFalse(Position (memory[pc + 1] as usize), Position(memory[pc + 2] as usize)),
-            0106 => JumpIfFalse(Immediate(memory[pc + 1]), Position(memory[pc + 2] as usize)),
-            1006 => JumpIfFalse(Position (memory[pc + 1] as usize), Immediate (memory[pc + 2])),
-            1106 => JumpIfFalse(Immediate(memory[pc + 1]), Immediate (memory[pc + 2])),
-
-            00007 => LessThan(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            00107 => LessThan(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            01007 => LessThan(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            01107 => LessThan(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            10007 => LessThan(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            10107 => LessThan(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            11007 => LessThan(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-            11107 => LessThan(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-
-            00008 => Equals(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            00108 => Equals(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Immediate(memory[pc + 3])),
-            01008 => Equals(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            01108 => Equals(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Immediate(memory[pc + 3])),
-            10008 => Equals(Position (memory[pc + 1] as usize), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            10108 => Equals(Immediate(memory[pc + 1]), Position (memory[pc + 2] as usize), Position (memory[pc + 3] as usize)),
-            11008 => Equals(Position (memory[pc + 1] as usize), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-            11108 => Equals(Immediate(memory[pc + 1]), Immediate(memory[pc + 2]), Position (memory[pc + 3] as usize)),
-
-            99 => Halt,
+        let opcode = full_opcode % 100;
+        let params = full_opcode / 100;
+        match opcode {
+            1 | 2 | 7 | 8 => {
+                let p1 = match params % 10 {
+                    0 => Position (memory[pc + 1] as usize),
+                    1 => Immediate(memory[pc + 1]),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                };
+                let p2 = match (params / 10) % 10 {
+                    0 => Position (memory[pc + 2] as usize),
+                    1 => Immediate(memory[pc + 2]),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                };
+                let pout = match params / 100 {
+                    0 => Immediate (memory[pc + 3]),
+                    1 => Position(memory[pc + 3] as usize),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                };
+                match opcode {
+                    1 => Add(p1, p2, pout),
+                    2 => Multiply(p1, p2, pout),
+                    7 => LessThan(p1, p2, pout),
+                    8 => Equals(p1, p2, pout),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                }
+            },
+            3 => {
+                match params {
+                    0 => Input(Immediate(memory[pc + 1])),
+                    1 => Input(Position (memory[pc + 1] as usize)),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                }
+            },
+            4 => {
+                match params {
+                    0 => Output(Position (memory[pc + 1] as usize)),
+                    1 => Output(Immediate(memory[pc + 1])),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                }
+            },
+            5 | 6 => {
+                let p1 = match params % 10 {
+                    0 => Position (memory[pc + 1] as usize),
+                    1 => Immediate(memory[pc + 1]),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                };
+                let p2 = match (params / 10) % 10 {
+                    0 => Position (memory[pc + 2] as usize),
+                    1 => Immediate(memory[pc + 2]),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                };
+                match opcode {
+                    5 => JumpIfTrue(p1, p2),
+                    6 => JumpIfFalse(p1, p2),
+                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                }
+            },
+            99 => {
+                if full_opcode != opcode {
+                    panic!("Unrecognised opcode {}", full_opcode)
+                }
+                Halt
+            }
             _ => panic!("Unrecognised opcode {}", full_opcode)
         }
     }
