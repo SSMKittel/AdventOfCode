@@ -11,12 +11,17 @@ fn main() {
 
     let mut intersect = intersect_points(&first, &second);
     intersect.remove(&Point{x: 0, y: 0});
-    let closest = intersect
+    let closest_manhatten = intersect
         .iter()
         .map(|x| x.manhatten_distance(&Point{x: 0, y: 0}))
         .min()
         .unwrap();
-    println!("Manhatten Distance: {:?}", closest);
+    println!("Manhatten Distance: {:?}", closest_manhatten);
+
+    let dist = |x: &Point| distance(&first, &x).unwrap() + distance(&second, &x).unwrap();
+    let closest_distance = intersect.iter().map(dist).min().unwrap();
+
+    println!("Real Distance: {:?}", closest_distance);
 }
 
 fn intersect_points(a: &Vec::<LineSegment>, b: &Vec::<LineSegment>) -> BTreeSet<Point> {
@@ -27,6 +32,19 @@ fn intersect_points(a: &Vec::<LineSegment>, b: &Vec::<LineSegment>) -> BTreeSet<
         }
     }
     points
+}
+
+fn distance(line: &Vec::<LineSegment>, point: &Point) -> Option<usize> {
+    let mut total: usize = 0;
+    for ls in line {
+        if let Some(dist) = ls.distance(&point) {
+            return Some(total + dist);
+        }
+        else {
+            total += ls.length();
+        }
+    }
+    None
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -86,6 +104,30 @@ impl LineSegment {
         match self {
             HLine(ls) => Point{ x: ls.x_end, y: ls.y },
             VLine(ls) => Point{ x: ls.x, y: ls.y_end }
+        }
+    }
+    fn distance(&self, p: &Point) -> Option<usize> {
+        match self {
+            HLine(ls) =>
+                if ls.y == p.y && ls.min_x() <= p.x && p.x <= ls.max_x() {
+                    Some((p.x - ls.x_start).abs() as usize)
+                }
+                else {
+                    None
+                },
+            VLine(ls) =>
+                if ls.x == p.x && ls.min_y() <= p.y && p.y <= ls.max_y() {
+                    Some((p.y - ls.y_start).abs() as usize)
+                }
+                else {
+                    None
+                }
+        }
+    }
+    fn length(&self) -> usize {
+        match self {
+            HLine(ls) => (ls.x_end - ls.x_start).abs() as usize,
+            VLine(ls) => (ls.y_end - ls.y_start).abs() as usize
         }
     }
     fn intersect(&self, other: &LineSegment) -> Vec<Point> {
@@ -179,6 +221,33 @@ impl Direction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_line_distance() {
+        let line = LineSegment::build(&Direction::from_str_csv("R8,U5,L5,D3"));
+        assert_eq!(Some(20), distance(&line, &Point{ x: 3, y: 3 }));
+
+        let line = LineSegment::build(&Direction::from_str_csv("U7,R6,D4,L4"));
+        assert_eq!(Some(20), distance(&line, &Point{ x: 3, y: 3 }));
+    }
+
+    #[test]
+    fn test_vline_distance() {
+        let a = VLine(YAxisLine{ x: 5, y_start: 6, y_end: 3 });
+        assert_eq!(Some(1), a.distance(&Point{ x: 5, y: 5 }));
+
+        let a = VLine(YAxisLine{ x: 5, y_start: 3, y_end: 6 });
+        assert_eq!(Some(2), a.distance(&Point{ x: 5, y: 5 }));
+    }
+
+    #[test]
+    fn test_hline_distance() {
+        let a = HLine(XAxisLine{ y: 5, x_start: 6, x_end: 3 });
+        assert_eq!(Some(1), a.distance(&Point{ x: 5, y: 5 }));
+
+        let a = HLine(XAxisLine{ y: 5, x_start: 3, x_end: 6 });
+        assert_eq!(Some(2), a.distance(&Point{ x: 5, y: 5 }));
+    }
 
     #[test]
     fn test_line_intersection() {
