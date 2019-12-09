@@ -27,12 +27,71 @@ impl Machine {
         loop {
             let op = Operation::decode(self.memory.borrow(), self.pc);
 
-            if let Some(new_pc) = op.execute(self) {
+            if let Some(new_pc) = self.step(op) {
                 self.pc = new_pc;
             }
             else {
                 break;
             }
+        }
+    }
+
+    fn step(&mut self, op: Operation) -> Option<usize> {
+        let memory = self.memory.borrow_mut();
+        let pc = self.pc;
+        let oplen = op.length();
+        match op {
+            Add(a, b, out) => {
+                out.write(memory, a.read(memory) + b.read(memory));
+                Some(pc + oplen)
+            },
+            Multiply(a, b, out) => {
+                out.write(memory, a.read(memory) * b.read(memory));
+                Some(pc + oplen)
+            },
+            Input(out) => {
+                out.write(memory, self.input.recv().unwrap());
+                Some(pc + oplen)
+            },
+            Output(a) => {
+                self.output.send(a.read(memory));
+                Some(pc + oplen)
+            },
+            JumpIfTrue(a, new_pc) => {
+                if a.read(memory) != 0 {
+                    Some(new_pc.read(memory) as usize)
+                }
+                else {
+                    Some(pc + oplen)
+                }
+            },
+            JumpIfFalse(a, new_pc) => {
+                if a.read(memory) == 0 {
+                    Some(new_pc.read(memory) as usize)
+                }
+                else {
+                    Some(pc + oplen)
+                }
+            },
+            LessThan(a, b, out) => {
+                if a.read(memory) < b.read(memory) {
+                    out.write(memory, 1);
+                }
+                else {
+                    out.write(memory, 0);
+                }
+                Some(pc + oplen)
+            },
+            Equals(a, b, out) => {
+                if a.read(memory) == b.read(memory) {
+                    out.write(memory, 1);
+                }
+                else {
+                    out.write(memory, 0);
+                }
+                Some(pc + oplen)
+            },
+            Halt => None
         }
     }
 }
@@ -75,64 +134,6 @@ enum Operation {
 }
 
 impl Operation {
-    fn execute(&self, machine: &mut Machine) -> Option<usize> {
-        let memory = machine.memory.borrow_mut();
-        let pc = machine.pc;
-        match self {
-            Add(a, b, out) => {
-                out.write(memory, a.read(memory) + b.read(memory));
-                Some(pc + self.length())
-            },
-            Multiply(a, b, out) => {
-                out.write(memory, a.read(memory) * b.read(memory));
-                Some(pc + self.length())
-            },
-            Input(out) => {
-                out.write(memory, machine.input.recv().unwrap());
-                Some(pc + self.length())
-            },
-            Output(a) => {
-                machine.output.send(a.read(memory));
-                Some(pc + self.length())
-            },
-            JumpIfTrue(a, new_pc) => {
-                if a.read(memory) != 0 {
-                    Some(new_pc.read(memory) as usize)
-                }
-                else {
-                    Some(pc + self.length())
-                }
-            },
-            JumpIfFalse(a, new_pc) => {
-                if a.read(memory) == 0 {
-                    Some(new_pc.read(memory) as usize)
-                }
-                else {
-                    Some(pc + self.length())
-                }
-            },
-            LessThan(a, b, out) => {
-                if a.read(memory) < b.read(memory) {
-                    out.write(memory, 1);
-                }
-                else {
-                    out.write(memory, 0);
-                }
-                Some(pc + self.length())
-            },
-            Equals(a, b, out) => {
-                if a.read(memory) == b.read(memory) {
-                    out.write(memory, 1);
-                }
-                else {
-                    out.write(memory, 0);
-                }
-                Some(pc + self.length())
-            },
-            Halt => None
-        }
-    }
-
     fn length(&self) -> usize {
         match self {
             Add(_, _, _) => 4,
