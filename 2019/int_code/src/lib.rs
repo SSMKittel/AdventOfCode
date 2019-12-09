@@ -27,50 +27,53 @@ impl Machine {
         loop {
             let op = Operation::decode(self.memory.borrow(), self.pc);
 
-            if let Some(new_pc) = self.step(op) {
-                self.pc = new_pc;
-            }
-            else {
-                break;
+            match self.step(op) {
+                StepResult::Halt => break,
+                StepResult::InputRequired => break,
+                StepResult::OutputError => break,
+                StepResult::Executed => ()
             }
         }
     }
 
-    fn step(&mut self, op: Operation) -> Option<usize> {
+    fn step(&mut self, op: Operation) -> StepResult {
         let memory = self.memory.borrow_mut();
-        let pc = self.pc;
         let oplen = op.length();
         match op {
             Add(a, b, out) => {
                 out.write(memory, a.read(memory) + b.read(memory));
-                Some(pc + oplen)
+                self.pc += oplen;
             },
             Multiply(a, b, out) => {
                 out.write(memory, a.read(memory) * b.read(memory));
-                Some(pc + oplen)
+                self.pc += oplen;
             },
             Input(out) => {
-                out.write(memory, self.input.recv().unwrap());
-                Some(pc + oplen)
+                let readval = self.input.recv();
+                match readval {
+                    Ok(rslt) => out.write(memory, rslt),
+                    Err(_) => return StepResult::InputRequired
+                }
+                self.pc += oplen;
             },
             Output(a) => {
                 self.output.send(a.read(memory));
-                Some(pc + oplen)
+                self.pc += oplen;
             },
             JumpIfTrue(a, new_pc) => {
                 if a.read(memory) != 0 {
-                    Some(new_pc.read(memory) as usize)
+                    self.pc = new_pc.read(memory) as usize;
                 }
                 else {
-                    Some(pc + oplen)
+                    self.pc += oplen;
                 }
             },
             JumpIfFalse(a, new_pc) => {
                 if a.read(memory) == 0 {
-                    Some(new_pc.read(memory) as usize)
+                    self.pc = new_pc.read(memory) as usize;
                 }
                 else {
-                    Some(pc + oplen)
+                    self.pc += oplen;
                 }
             },
             LessThan(a, b, out) => {
@@ -80,7 +83,7 @@ impl Machine {
                 else {
                     out.write(memory, 0);
                 }
-                Some(pc + oplen)
+                self.pc += oplen;
             },
             Equals(a, b, out) => {
                 if a.read(memory) == b.read(memory) {
@@ -89,11 +92,19 @@ impl Machine {
                 else {
                     out.write(memory, 0);
                 }
-                Some(pc + oplen)
+                self.pc += oplen;
             },
-            Halt => None
+            Halt => return StepResult::Halt
         }
+        StepResult::Executed
     }
+}
+
+enum StepResult {
+    Halt,
+    InputRequired,
+    OutputError,
+    Executed
 }
 
 
