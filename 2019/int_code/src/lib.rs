@@ -1,33 +1,39 @@
 
+use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc;
+
 pub type Word = i64;
 pub struct Machine {
     memory: Vec<Word>,
     pc: usize,
-    input: Vec<Word>
+    input: Receiver<Word>,
+    output: Sender<Word>
 }
 
 impl Machine {
-    pub fn new(memory: Vec<Word>, input: Vec<Word>) -> Machine {
-        Machine{
-            memory,
-            pc: 0,
-            input
-        }
+    pub fn with_channels(memory: Vec<Word>, input: Receiver<Word>, output: Sender<Word>) -> Machine {
+        Machine{ memory, pc: 0, input, output }
     }
 
-    pub fn execute(&mut self) -> Vec<Word> {
-        let mut output = Vec::<Word>::new();
+    pub fn new(memory: Vec<Word>) -> (Machine, Sender<Word>, Receiver<Word>) {
+        let (input_write, input): (Sender<Word>, Receiver<Word>) = mpsc::channel();
+        let (output, output_read): (Sender<Word>, Receiver<Word>) = mpsc::channel();
+
+        (Machine{ memory, pc: 0, input, output },
+        input_write, output_read)
+    }
+
+    pub fn execute(&mut self) {
         loop {
             let op = Operation::decode(self.memory.borrow(), self.pc);
 
-            if let Some(new_pc) = op.execute(self, &mut output) {
+            if let Some(new_pc) = op.execute(self) {
                 self.pc = new_pc;
             }
             else {
                 break;
             }
         }
-        output
     }
 }
 
@@ -69,8 +75,8 @@ enum Operation {
 }
 
 impl Operation {
-    fn execute(&self, machine: &mut Machine, output: &mut Vec<Word>) -> Option<usize> {
-        let mut memory = machine.memory.borrow_mut();
+    fn execute(&self, machine: &mut Machine) -> Option<usize> {
+        let memory = machine.memory.borrow_mut();
         let pc = machine.pc;
         match self {
             Add(a, b, out) => {
@@ -82,11 +88,11 @@ impl Operation {
                 Some(pc + self.length())
             },
             Input(out) => {
-                out.write(memory, machine.input.pop().unwrap());
+                out.write(memory, machine.input.recv().unwrap());
                 Some(pc + self.length())
             },
             Output(a) => {
-                output.push(a.read(memory));
+                machine.output.send(a.read(memory));
                 Some(pc + self.length())
             },
             JumpIfTrue(a, new_pc) => {
@@ -224,19 +230,25 @@ mod tests {
             .collect::<Vec<_>>();
 
         {
-            let mut machine_7 = Machine::new(memory.to_vec(), vec![7]);
-            let output = machine_7.execute();
-            assert_eq!(vec![999], output);
+            let (mut machine_7, input_write, out_read) = Machine::new(memory.to_vec());
+            input_write.send(7).unwrap();
+            machine_7.execute();
+            let vals = out_read.try_iter().collect::<Vec<_>>();
+            assert_eq!(vec![999], vals);
         }
         {
-            let mut machine_8 = Machine::new(memory.to_vec(), vec![8]);
-            let output = machine_8.execute();
-            assert_eq!(vec![1000], output);
+            let (mut machine_8, input_write, out_read) = Machine::new(memory.to_vec());
+            input_write.send(8).unwrap();
+            machine_8.execute();
+            let vals = out_read.try_iter().collect::<Vec<_>>();
+            assert_eq!(vec![1000], vals);
         }
         {
-            let mut machine_9 = Machine::new(memory.to_vec(), vec![9]);
-            let output = machine_9.execute();
-            assert_eq!(vec![1001], output);
+            let (mut machine_9, input_write, out_read) = Machine::new(memory.to_vec());
+            input_write.send(9).unwrap();
+            machine_9.execute();
+            let vals = out_read.try_iter().collect::<Vec<_>>();
+            assert_eq!(vec![1001], vals);
         }
     }
 }
