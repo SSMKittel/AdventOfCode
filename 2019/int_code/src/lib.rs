@@ -314,7 +314,7 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ExecuteError::ExecutionLimitReached;
+    use crate::ExecuteError::*;
 
     #[test]
     fn test_program() {
@@ -351,5 +351,37 @@ mod tests {
 
         let (mut machine, _, _) = Machine::new(memory);
         assert_eq!(Err(ExecutionLimitReached), machine.execute(10));
+    }
+
+    #[test]
+    fn test_input() {
+        let input_mem = "3,2,0";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _inp, _) = Machine::new(memory.clone());
+        assert_eq!(Err(InputRequired), machine.execute(10));
+        // If input is still required on a second call, but it is still not available,
+        // we expect a NoProgress error as the machine was unable to do any work
+        assert_eq!(Err(NoProgress), machine.execute(10));
+
+        let (mut machine, _, _) = Machine::new(memory);
+        // use of _ parameter for input-source causes it to be released, and the corresponding receiver to be closed
+        // Complete failure when trying to get input
+        assert_eq!(Err(InputError), machine.execute(10));
+    }
+
+    #[test]
+    fn test_output() {
+        let input_mem = "104,1,99";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, out) = Machine::new(memory.clone());
+        assert_eq!(Ok(()), machine.execute(10));
+        assert_eq!(vec![1], out.try_iter().collect::<Vec<Word>>());
+
+        let (mut machine, _, _) = Machine::new(memory);
+        // use of _ parameter for output-target causes it to be released, and the corresponding sender to be closed
+        // Complete failure when trying to write output
+        assert_eq!(Err(OutputError), machine.execute(10));
     }
 }
