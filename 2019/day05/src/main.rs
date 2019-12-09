@@ -11,14 +11,14 @@ fn main() {
     {
         let (mut machine_1, input_write, output_read) = Machine::new(memory.to_vec());
         input_write.send(1).unwrap();
-        machine_1.execute();
+        machine_1.execute().unwrap();
         let output = output_read.try_iter().collect::<Vec<_>>();
         println!("System 1: {:?}", output);
     }
     {
         let (mut machine_5, input_write, output_read) = Machine::new(memory.to_vec());
         input_write.send(5).unwrap();
-        machine_5.execute();
+        machine_5.execute().unwrap();
         let output = output_read.try_iter().collect::<Vec<_>>();
         println!("System 5: {:?}", output);
     }

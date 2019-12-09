@@ -10,6 +10,32 @@ pub struct Machine {
     output: Sender<Word>
 }
 
+#[derive(Eq, PartialEq, Debug)]
+pub enum ExecuteError {
+    InputRequired,
+    OutputError,
+}
+
+use std::fmt;
+use std::error::Error as StdError;
+
+impl fmt::Display for ExecuteError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ExecuteError::OutputError => f.write_str("OutputError"),
+            ExecuteError::InputRequired => f.write_str("InputRequired"),
+        }
+    }
+}
+impl StdError for ExecuteError {
+    fn description(&self) -> &str {
+        match *self {
+            ExecuteError::OutputError => "Output Error",
+            ExecuteError::InputRequired => "Input Required",
+        }
+    }
+}
+
 impl Machine {
     pub fn with_channels(memory: Vec<Word>, input: Receiver<Word>, output: Sender<Word>) -> Machine {
         Machine{ memory, pc: 0, input, output }
@@ -23,20 +49,20 @@ impl Machine {
         input_write, output_read)
     }
 
-    pub fn execute(&mut self) {
+    pub fn execute(&mut self) -> Result<(), ExecuteError> {
         loop {
             let op = Operation::decode(self.memory.borrow(), self.pc);
 
             match self.step(op) {
-                StepResult::Halt => break,
-                StepResult::InputRequired => break,
-                StepResult::OutputError => break,
-                StepResult::Executed => ()
+                Ok(StepResult::Executed) => (),
+                Ok(StepResult::Halt) => return Ok(()),
+                Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
+                Err(StepError::OutputError) => return Err(ExecuteError::OutputError)
             }
         }
     }
 
-    fn step(&mut self, op: Operation) -> StepResult {
+    fn step(&mut self, op: Operation) -> Result<StepResult, StepError> {
         let memory = self.memory.borrow_mut();
         let oplen = op.length();
         match op {
@@ -52,12 +78,15 @@ impl Machine {
                 let readval = self.input.recv();
                 match readval {
                     Ok(rslt) => out.write(memory, rslt),
-                    Err(_) => return StepResult::InputRequired
+                    Err(_) => return Err(StepError::InputRequired)
                 }
                 self.pc += oplen;
             },
             Output(a) => {
-                self.output.send(a.read(memory));
+                match self.output.send(a.read(memory)) {
+                    Err(_) => return Err(StepError::OutputError),
+                    _ => ()
+                }
                 self.pc += oplen;
             },
             JumpIfTrue(a, new_pc) => {
@@ -94,17 +123,19 @@ impl Machine {
                 }
                 self.pc += oplen;
             },
-            Halt => return StepResult::Halt
+            Halt => return Ok(StepResult::Halt)
         }
-        StepResult::Executed
+        Ok(StepResult::Executed)
     }
 }
 
 enum StepResult {
-    Halt,
+    Executed,
+    Halt
+}
+enum StepError {
     InputRequired,
-    OutputError,
-    Executed
+    OutputError
 }
 
 
@@ -244,21 +275,21 @@ mod tests {
         {
             let (mut machine_7, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(7).unwrap();
-            machine_7.execute();
+            assert_eq!(Ok(()), machine_7.execute());
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![999], vals);
         }
         {
             let (mut machine_8, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(8).unwrap();
-            machine_8.execute();
+            assert_eq!(Ok(()), machine_8.execute());
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![1000], vals);
         }
         {
             let (mut machine_9, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(9).unwrap();
-            machine_9.execute();
+            assert_eq!(Ok(()), machine_9.execute());
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![1001], vals);
         }
