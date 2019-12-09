@@ -2,19 +2,73 @@
 pub use std::sync::mpsc::{Sender, Receiver, channel};
 use crate::Parameter::*;
 use crate::Operation::*;
-use std::borrow::{BorrowMut, Borrow};
-use std::num::ParseIntError;
+use std::borrow::{BorrowMut};
+use std::num::{ParseIntError};
 use std::fmt;
 use std::error::Error as StdError;
 use std::sync::mpsc::TryRecvError;
+use std::convert::TryInto;
 
 pub type Word = i64;
 pub struct Machine {
-    memory: Vec<Word>,
-    pc: usize,
+    memory: Memory,
+    pc: Word,
     input: Receiver<Word>,
     output: Sender<Word>,
     waiting_input: bool
+}
+
+struct Memory {
+    memory: Vec<Word>
+}
+struct AccessViolation(Word);
+
+impl Memory {
+    fn read(&self, address: Parameter) -> Result<Word, AccessViolation> {
+        match address {
+            Immediate(val) => Ok(val),
+            Position(addr) => {
+                Ok(self.memory[Memory::usize_checked(addr, self.memory.len())?])
+            }
+        }
+    }
+    fn read_position(&self, address: Word) -> Result<Word, AccessViolation> {
+        Ok(self.memory[Memory::usize_checked(address, self.memory.len())?])
+    }
+    fn write(&mut self, address: Parameter, new_val: Word) -> Result<(), AccessViolation> {
+        let direct_addr: Word;
+
+        match address {
+            Immediate(da) => {
+                direct_addr = da;
+            },
+            Position(ia) => {
+                direct_addr = self.memory[Memory::usize_checked(ia, self.memory.len())?];
+            }
+        }
+
+        let true_addr = Memory::usize_checked(direct_addr, self.memory.len())?;
+        self.memory[true_addr] = new_val;
+        Ok(())
+    }
+
+    fn usize_checked(addr: Word, max_value: usize) -> Result<usize, AccessViolation> {
+        if addr < 0 {
+            return Err(AccessViolation(addr));
+        }
+        match addr.try_into() {
+            Ok(addr_u) => {
+                if addr_u >= max_value {
+                    Err(AccessViolation(addr))
+                }
+                else {
+                    Ok(addr_u)
+                }
+            },
+            Err(_) => Err(AccessViolation(addr))
+        }
+
+    }
 }
 
 #[derive(Eq, PartialEq, Debug)]
@@ -24,7 +78,8 @@ pub enum ExecuteError {
     OutputError,
     NoProgress,
     ExecutionLimitReached,
-    UnrecognisedOpcode(Word)
+    UnrecognisedOpcode(Word),
+    MemoryAccessViolation(Word)
 }
 
 pub fn parse_csv(csv: &str) -> Result<Vec<Word>, ParseIntError> {
@@ -41,6 +96,7 @@ impl fmt::Display for ExecuteError {
             ExecuteError::InputRequired => f.write_str("InputRequired"),
             ExecuteError::NoProgress => f.write_str("NoProgress"),
             ExecuteError::ExecutionLimitReached => f.write_str("ExecutionLimitReached"),
+            ExecuteError::MemoryAccessViolation(address) => write!(f, "MemoryAccessViolation({})", address),
             ExecuteError::UnrecognisedOpcode(op) => write!(f, "UnrecognisedOpcode({})", op),
         }
     }
@@ -53,6 +109,7 @@ impl StdError for ExecuteError {
             ExecuteError::InputRequired => "Input Required",
             ExecuteError::NoProgress => "No Progress",
             ExecuteError::ExecutionLimitReached => "Execution Limit Reached",
+            ExecuteError::MemoryAccessViolation(_) => "Memory Access Violation",
             ExecuteError::UnrecognisedOpcode(_) => "Unrecognised Opcode",
         }
     }
@@ -60,14 +117,14 @@ impl StdError for ExecuteError {
 
 impl Machine {
     pub fn with_channels(memory: Vec<Word>, input: Receiver<Word>, output: Sender<Word>) -> Machine {
-        Machine{ memory, pc: 0, input, output, waiting_input: false }
+        Machine{ memory: Memory{memory}, pc: 0, input, output, waiting_input: false }
     }
 
     pub fn new(memory: Vec<Word>) -> (Machine, Sender<Word>, Receiver<Word>) {
         let (input_write, input): (Sender<Word>, Receiver<Word>) = channel();
         let (output, output_read): (Sender<Word>, Receiver<Word>) = channel();
 
-        (Machine{ memory, pc: 0, input, output, waiting_input: false },
+        (Machine{ memory: Memory{memory}, pc: 0, input, output, waiting_input: false },
         input_write, output_read)
     }
 
@@ -77,18 +134,11 @@ impl Machine {
             if lim == 0 {
                 return Err(ExecuteError::ExecutionLimitReached);
             }
-            match Operation::decode(self.memory.borrow(), self.pc) {
-                Err(op) => return Err(ExecuteError::UnrecognisedOpcode(op)),
-                Ok(op) => {
-                    match self.step(op) {
-                        Ok(StepResult::Executed) => (),
-                        Ok(StepResult::Halt) => return Ok(()),
-                        Err(StepError::InputError) => return Err(ExecuteError::InputError),
-                        Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
-                        Err(StepError::OutputError) => return Err(ExecuteError::OutputError),
-                        Err(StepError::NoProgress) => return Err(ExecuteError::NoProgress)
-                    }
-                },
+
+            let op = Operation::decode(&self.memory, self.pc)?;
+            match self.step(op)? {
+                StepResult::Executed => (),
+                StepResult::Halt => return Ok(())
             }
             lim -= 1;
         }
@@ -96,20 +146,19 @@ impl Machine {
 
     fn step(&mut self, op: Operation) -> Result<StepResult, StepError> {
         let memory = self.memory.borrow_mut();
-        let oplen = op.length();
         match op {
             Add(a, b, out) => {
-                out.write(memory, a.read(memory) + b.read(memory));
-                self.pc += oplen;
+                memory.write(out, memory.read(a)? + memory.read(b)?)?;
+                self.pc += 4;
             },
             Multiply(a, b, out) => {
-                out.write(memory, a.read(memory) * b.read(memory));
-                self.pc += oplen;
+                memory.write(out, memory.read(a)? * memory.read(b)?)?;
+                self.pc += 4;
             },
             Input(out) => {
                 let readval = self.input.try_recv();
                 match readval {
-                    Ok(rslt) => out.write(memory, rslt),
+                    Ok(rslt) => memory.write(out, rslt)?,
                     Err(a) => {
                         if self.waiting_input {
                             return Err(StepError::NoProgress)
@@ -123,51 +172,51 @@ impl Machine {
                         }
                     }
                 }
-                self.pc += oplen;
+                self.pc += 2;
             },
             Output(a) => {
-                match self.output.send(a.read(memory)) {
+                match self.output.send(memory.read(a)?) {
                     Err(_) => {
                         self.waiting_input = false;
                         return Err(StepError::OutputError)
                     },
                     _ => ()
                 }
-                self.pc += oplen;
+                self.pc += 2;
             },
             JumpIfTrue(a, new_pc) => {
-                if a.read(memory) != 0 {
-                    self.pc = new_pc.read(memory) as usize;
+                if memory.read(a)? != 0 {
+                    self.pc = memory.read(new_pc)?;
                 }
                 else {
-                    self.pc += oplen;
+                    self.pc += 3;
                 }
             },
             JumpIfFalse(a, new_pc) => {
-                if a.read(memory) == 0 {
-                    self.pc = new_pc.read(memory) as usize;
+                if memory.read(a)? == 0 {
+                    self.pc = memory.read(new_pc)?;
                 }
                 else {
-                    self.pc += oplen;
+                    self.pc += 3;
                 }
             },
             LessThan(a, b, out) => {
-                if a.read(memory) < b.read(memory) {
-                    out.write(memory, 1);
+                if memory.read(a)? < memory.read(b)? {
+                    memory.write(out, 1)?;
                 }
                 else {
-                    out.write(memory, 0);
+                    memory.write(out, 0)?;
                 }
-                self.pc += oplen;
+                self.pc += 4;
             },
             Equals(a, b, out) => {
-                if a.read(memory) == b.read(memory) {
-                    out.write(memory, 1);
+                if memory.read(a)? == memory.read(b)? {
+                    memory.write(out, 1)?;
                 }
                 else {
-                    out.write(memory, 0);
+                    memory.write(out, 0)?;
                 }
-                self.pc += oplen;
+                self.pc += 4;
             },
             Halt => {
                 self.waiting_input = false;
@@ -179,6 +228,18 @@ impl Machine {
     }
 }
 
+impl From<AccessViolation> for StepError {
+    fn from(AccessViolation(a): AccessViolation) -> Self {
+        StepError::MemoryAccessViolation(a)
+    }
+}
+
+impl From<AccessViolation> for DecodeError {
+    fn from(AccessViolation(a): AccessViolation) -> Self {
+        DecodeError::AccessViolation(a)
+    }
+}
+
 enum StepResult {
     Executed,
     Halt
@@ -187,28 +248,14 @@ enum StepError {
     InputRequired,
     InputError,
     OutputError,
-    NoProgress
+    NoProgress,
+    MemoryAccessViolation(Word)
 }
 
 
 enum Parameter {
     Immediate(Word),
-    Position(usize)
-}
-
-impl Parameter {
-    fn read(&self, memory: &[Word]) -> Word {
-        match self {
-            Immediate(val) => *val,
-            Position(addr) => memory[*addr]
-        }
-    }
-    fn write(&self, memory: &mut [Word], new_val: Word) {
-        match self {
-            Immediate(direct_addr) => memory[*direct_addr as usize] = new_val,
-            Position(indirect_addr) => memory[memory[*indirect_addr] as usize] = new_val
-        }
-    }
+    Position(Word)
 }
 
 enum Operation {
@@ -223,79 +270,90 @@ enum Operation {
     Halt
 }
 
-impl Operation {
-    fn length(&self) -> usize {
-        match self {
-            Add(_, _, _) => 4,
-            Multiply(_, _, _) => 4,
-            Input(_) => 2,
-            Output(_) => 2,
-            JumpIfTrue(_, _) => 3,
-            JumpIfFalse(_, _) => 3,
-            LessThan(_, _, _) => 4,
-            Equals(_, _, _) => 4,
-            Halt => 1
+enum DecodeError {
+    InvalidOpcode(Word),
+    AccessViolation(Word)
+}
+
+impl From<DecodeError> for ExecuteError {
+    fn from(a: DecodeError) -> Self {
+        match a {
+            DecodeError::InvalidOpcode(op) => ExecuteError::UnrecognisedOpcode(op),
+            DecodeError::AccessViolation(av) => ExecuteError::MemoryAccessViolation(av),
         }
     }
+}
+impl From<StepError> for ExecuteError {
+    fn from(a: StepError) -> Self {
+        match a {
+            StepError::MemoryAccessViolation(addr) => ExecuteError::MemoryAccessViolation(addr),
+            StepError::InputError => ExecuteError::InputError,
+            StepError::InputRequired => ExecuteError::InputRequired,
+            StepError::OutputError => ExecuteError::OutputError,
+            StepError::NoProgress => ExecuteError::NoProgress
+        }
+    }
+}
 
-    fn decode(memory: &[Word], pc: usize) -> Result<Operation, Word> {
-        let full_opcode = memory[pc];
+impl Operation {
+    fn decode(memory: &Memory, pc: Word) -> Result<Operation, DecodeError> {
+        let full_opcode = memory.read_position(pc)?;
         let opcode = full_opcode % 100;
         let params = full_opcode / 100;
         match opcode {
             1 | 2 | 7 | 8 => {
                 let p1 = match params % 10 {
-                    0 => Position (memory[pc + 1] as usize),
-                    1 => Immediate(memory[pc + 1]),
-                    _ => return Err(full_opcode)
+                    0 => Position (memory.read_position(pc + 1)?),
+                    1 => Immediate(memory.read_position(pc + 1)?),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let p2 = match (params / 10) % 10 {
-                    0 => Position (memory[pc + 2] as usize),
-                    1 => Immediate(memory[pc + 2]),
-                    _ => return Err(full_opcode)
+                    0 => Position (memory.read_position(pc + 2)?),
+                    1 => Immediate(memory.read_position(pc + 2)?),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let pout = match params / 100 {
-                    0 => Immediate (memory[pc + 3]),
-                    1 => Position(memory[pc + 3] as usize),
-                    _ => return Err(full_opcode)
+                    0 => Immediate(memory.read_position(pc + 3)?),
+                    1 => Position (memory.read_position(pc + 3)?),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 match opcode {
                     1 => Ok(Add(p1, p2, pout)),
                     2 => Ok(Multiply(p1, p2, pout)),
                     7 => Ok(LessThan(p1, p2, pout)),
                     8 => Ok(Equals(p1, p2, pout)),
-                    _ => return Err(full_opcode)
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             3 => {
                 match params {
-                    0 => Ok(Input(Immediate(memory[pc + 1]))),
-                    1 => Ok(Input(Position (memory[pc + 1] as usize))),
-                    _ => return Err(full_opcode)
+                    0 => Ok(Input(Immediate(memory.read_position(pc + 1)?))),
+                    1 => Ok(Input(Position (memory.read_position(pc + 1)?))),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             4 => {
                 match params {
-                    0 => Ok(Output(Position (memory[pc + 1] as usize))),
-                    1 => Ok(Output(Immediate(memory[pc + 1]))),
-                    _ => return Err(full_opcode)
+                    0 => Ok(Output(Position (memory.read_position(pc + 1)?))),
+                    1 => Ok(Output(Immediate(memory.read_position(pc + 1)?))),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             5 | 6 => {
                 let p1 = match params % 10 {
-                    0 => Position (memory[pc + 1] as usize),
-                    1 => Immediate(memory[pc + 1]),
-                    _ => return Err(full_opcode)
+                    0 => Position (memory.read_position(pc + 1)?),
+                    1 => Immediate(memory.read_position(pc + 1)?),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let p2 = match (params / 10) % 10 {
-                    0 => Position (memory[pc + 2] as usize),
-                    1 => Immediate(memory[pc + 2]),
-                    _ => return Err(full_opcode)
+                    0 => Position (memory.read_position(pc + 2)?),
+                    1 => Immediate(memory.read_position(pc + 2)?),
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 match opcode {
                     5 => Ok(JumpIfTrue(p1, p2)),
                     6 => Ok(JumpIfFalse(p1, p2)),
-                    _ => return Err(full_opcode)
+                    _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             99 => {
@@ -303,10 +361,10 @@ impl Operation {
                     Ok(Halt)
                 }
                 else {
-                    Err(full_opcode)
+                    Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             }
-            _ => Err(full_opcode)
+            _ => Err(DecodeError::InvalidOpcode(full_opcode))
         }
     }
 }
@@ -383,5 +441,39 @@ mod tests {
         // use of _ parameter for output-target causes it to be released, and the corresponding sender to be closed
         // Complete failure when trying to write output
         assert_eq!(Err(OutputError), machine.execute(10));
+    }
+
+    #[test]
+    fn test_pc_access_violation() {
+        let input_mem = "1,0,0,0";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, _) = Machine::new(memory.clone());
+        assert_eq!(Err(ExecuteError::MemoryAccessViolation(4)), machine.execute(10));
+    }
+
+    #[test]
+    fn test_pc_access_violation_1() {
+        let input_mem = "1";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, _) = Machine::new(memory.clone());
+        assert_eq!(Err(ExecuteError::MemoryAccessViolation(1)), machine.execute(10));
+    }
+    #[test]
+    fn test_pc_access_violation_2() {
+        let input_mem = "1,0";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, _) = Machine::new(memory.clone());
+        assert_eq!(Err(ExecuteError::MemoryAccessViolation(2)), machine.execute(10));
+    }
+    #[test]
+    fn test_pc_access_violation_3() {
+        let input_mem = "1,0,0";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, _) = Machine::new(memory.clone());
+        assert_eq!(Err(ExecuteError::MemoryAccessViolation(3)), machine.execute(10));
     }
 }
