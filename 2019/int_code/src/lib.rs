@@ -19,7 +19,8 @@ pub struct Machine {
 pub enum ExecuteError {
     InputRequired,
     OutputError,
-    NoProgress
+    NoProgress,
+    UnrecognisedOpcode(Word)
 }
 
 pub fn parse_csv(csv: &str) -> Result<Vec<Word>, ParseIntError> {
@@ -37,6 +38,7 @@ impl fmt::Display for ExecuteError {
             ExecuteError::OutputError => f.write_str("OutputError"),
             ExecuteError::InputRequired => f.write_str("InputRequired"),
             ExecuteError::NoProgress => f.write_str("NoProgress"),
+            ExecuteError::UnrecognisedOpcode(op) => write!(f, "UnrecognisedOpcode({})", op),
         }
     }
 }
@@ -46,6 +48,7 @@ impl StdError for ExecuteError {
             ExecuteError::OutputError => "Output Error",
             ExecuteError::InputRequired => "Input Required",
             ExecuteError::NoProgress => "No Progress",
+            ExecuteError::UnrecognisedOpcode(_) => "Unrecognised Opcode",
         }
     }
 }
@@ -65,15 +68,19 @@ impl Machine {
 
     pub fn execute(&mut self) -> Result<(), ExecuteError> {
         loop {
-            let op = Operation::decode(self.memory.borrow(), self.pc);
-
-            match self.step(op) {
-                Ok(StepResult::Executed) => (),
-                Ok(StepResult::Halt) => return Ok(()),
-                Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
-                Err(StepError::OutputError) => return Err(ExecuteError::OutputError),
-                Err(StepError::NoProgress) => return Err(ExecuteError::NoProgress)
+            match Operation::decode(self.memory.borrow(), self.pc) {
+                Err(op) => return Err(ExecuteError::UnrecognisedOpcode(op)),
+                Ok(op) => {
+                    match self.step(op) {
+                        Ok(StepResult::Executed) => (),
+                        Ok(StepResult::Halt) => return Ok(()),
+                        Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
+                        Err(StepError::OutputError) => return Err(ExecuteError::OutputError),
+                        Err(StepError::NoProgress) => return Err(ExecuteError::NoProgress)
+                    }
+                },
             }
+
         }
     }
 
@@ -217,7 +224,7 @@ impl Operation {
         }
     }
 
-    fn decode(memory: &[Word], pc: usize) -> Operation {
+    fn decode(memory: &[Word], pc: usize) -> Result<Operation, Word> {
         let full_opcode = memory[pc];
         let opcode = full_opcode % 100;
         let params = full_opcode / 100;
@@ -226,64 +233,66 @@ impl Operation {
                 let p1 = match params % 10 {
                     0 => Position (memory[pc + 1] as usize),
                     1 => Immediate(memory[pc + 1]),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    _ => return Err(full_opcode)
                 };
                 let p2 = match (params / 10) % 10 {
                     0 => Position (memory[pc + 2] as usize),
                     1 => Immediate(memory[pc + 2]),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    _ => return Err(full_opcode)
                 };
                 let pout = match params / 100 {
                     0 => Immediate (memory[pc + 3]),
                     1 => Position(memory[pc + 3] as usize),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    _ => return Err(full_opcode)
                 };
                 match opcode {
-                    1 => Add(p1, p2, pout),
-                    2 => Multiply(p1, p2, pout),
-                    7 => LessThan(p1, p2, pout),
-                    8 => Equals(p1, p2, pout),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    1 => Ok(Add(p1, p2, pout)),
+                    2 => Ok(Multiply(p1, p2, pout)),
+                    7 => Ok(LessThan(p1, p2, pout)),
+                    8 => Ok(Equals(p1, p2, pout)),
+                    _ => return Err(full_opcode)
                 }
             },
             3 => {
                 match params {
-                    0 => Input(Immediate(memory[pc + 1])),
-                    1 => Input(Position (memory[pc + 1] as usize)),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    0 => Ok(Input(Immediate(memory[pc + 1]))),
+                    1 => Ok(Input(Position (memory[pc + 1] as usize))),
+                    _ => return Err(full_opcode)
                 }
             },
             4 => {
                 match params {
-                    0 => Output(Position (memory[pc + 1] as usize)),
-                    1 => Output(Immediate(memory[pc + 1])),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    0 => Ok(Output(Position (memory[pc + 1] as usize))),
+                    1 => Ok(Output(Immediate(memory[pc + 1]))),
+                    _ => return Err(full_opcode)
                 }
             },
             5 | 6 => {
                 let p1 = match params % 10 {
                     0 => Position (memory[pc + 1] as usize),
                     1 => Immediate(memory[pc + 1]),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    _ => return Err(full_opcode)
                 };
                 let p2 = match (params / 10) % 10 {
                     0 => Position (memory[pc + 2] as usize),
                     1 => Immediate(memory[pc + 2]),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    _ => return Err(full_opcode)
                 };
                 match opcode {
-                    5 => JumpIfTrue(p1, p2),
-                    6 => JumpIfFalse(p1, p2),
-                    _ => panic!("Unrecognised opcode {}", full_opcode)
+                    5 => Ok(JumpIfTrue(p1, p2)),
+                    6 => Ok(JumpIfFalse(p1, p2)),
+                    _ => return Err(full_opcode)
                 }
             },
             99 => {
-                if full_opcode != opcode {
-                    panic!("Unrecognised opcode {}", full_opcode)
+                if full_opcode == opcode {
+                    Ok(Halt)
                 }
-                Halt
+                else {
+                    Err(full_opcode)
+                }
             }
-            _ => panic!("Unrecognised opcode {}", full_opcode)
+            _ => Err(full_opcode)
         }
     }
 }
