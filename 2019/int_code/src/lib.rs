@@ -1,6 +1,5 @@
 
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
+pub use std::sync::mpsc::{Sender, Receiver, channel};
 use crate::Parameter::*;
 use crate::Operation::*;
 use std::borrow::{BorrowMut, Borrow};
@@ -12,13 +11,15 @@ pub struct Machine {
     memory: Vec<Word>,
     pc: usize,
     input: Receiver<Word>,
-    output: Sender<Word>
+    output: Sender<Word>,
+    waiting_input: bool
 }
 
 #[derive(Eq, PartialEq, Debug)]
 pub enum ExecuteError {
     InputRequired,
     OutputError,
+    NoProgress
 }
 
 pub fn parse_csv(csv: &str) -> Result<Vec<Word>, ParseIntError> {
@@ -35,6 +36,7 @@ impl fmt::Display for ExecuteError {
         match *self {
             ExecuteError::OutputError => f.write_str("OutputError"),
             ExecuteError::InputRequired => f.write_str("InputRequired"),
+            ExecuteError::NoProgress => f.write_str("NoProgress"),
         }
     }
 }
@@ -43,20 +45,21 @@ impl StdError for ExecuteError {
         match *self {
             ExecuteError::OutputError => "Output Error",
             ExecuteError::InputRequired => "Input Required",
+            ExecuteError::NoProgress => "No Progress",
         }
     }
 }
 
 impl Machine {
     pub fn with_channels(memory: Vec<Word>, input: Receiver<Word>, output: Sender<Word>) -> Machine {
-        Machine{ memory, pc: 0, input, output }
+        Machine{ memory, pc: 0, input, output, waiting_input: false }
     }
 
     pub fn new(memory: Vec<Word>) -> (Machine, Sender<Word>, Receiver<Word>) {
-        let (input_write, input): (Sender<Word>, Receiver<Word>) = mpsc::channel();
-        let (output, output_read): (Sender<Word>, Receiver<Word>) = mpsc::channel();
+        let (input_write, input): (Sender<Word>, Receiver<Word>) = channel();
+        let (output, output_read): (Sender<Word>, Receiver<Word>) = channel();
 
-        (Machine{ memory, pc: 0, input, output },
+        (Machine{ memory, pc: 0, input, output, waiting_input: false },
         input_write, output_read)
     }
 
@@ -68,7 +71,8 @@ impl Machine {
                 Ok(StepResult::Executed) => (),
                 Ok(StepResult::Halt) => return Ok(()),
                 Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
-                Err(StepError::OutputError) => return Err(ExecuteError::OutputError)
+                Err(StepError::OutputError) => return Err(ExecuteError::OutputError),
+                Err(StepError::NoProgress) => return Err(ExecuteError::NoProgress)
             }
         }
     }
@@ -89,13 +93,24 @@ impl Machine {
                 let readval = self.input.recv();
                 match readval {
                     Ok(rslt) => out.write(memory, rslt),
-                    Err(_) => return Err(StepError::InputRequired)
+                    Err(_) => {
+                        if self.waiting_input {
+                            return Err(StepError::NoProgress)
+                        }
+                        else {
+                            self.waiting_input = true;
+                            return Err(StepError::InputRequired)
+                        }
+                    }
                 }
                 self.pc += oplen;
             },
             Output(a) => {
                 match self.output.send(a.read(memory)) {
-                    Err(_) => return Err(StepError::OutputError),
+                    Err(_) => {
+                        self.waiting_input = false;
+                        return Err(StepError::OutputError)
+                    },
                     _ => ()
                 }
                 self.pc += oplen;
@@ -134,8 +149,12 @@ impl Machine {
                 }
                 self.pc += oplen;
             },
-            Halt => return Ok(StepResult::Halt)
+            Halt => {
+                self.waiting_input = false;
+                return Ok(StepResult::Halt)
+            }
         }
+        self.waiting_input = false;
         Ok(StepResult::Executed)
     }
 }
@@ -146,7 +165,8 @@ enum StepResult {
 }
 enum StepError {
     InputRequired,
-    OutputError
+    OutputError,
+    NoProgress
 }
 
 
