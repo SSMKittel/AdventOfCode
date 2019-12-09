@@ -4,7 +4,9 @@ use crate::Parameter::*;
 use crate::Operation::*;
 use std::borrow::{BorrowMut, Borrow};
 use std::num::ParseIntError;
-
+use std::fmt;
+use std::error::Error as StdError;
+use std::sync::mpsc::TryRecvError;
 
 pub type Word = i64;
 pub struct Machine {
@@ -18,8 +20,10 @@ pub struct Machine {
 #[derive(Eq, PartialEq, Debug)]
 pub enum ExecuteError {
     InputRequired,
+    InputError,
     OutputError,
     NoProgress,
+    ExecutionLimitReached,
     UnrecognisedOpcode(Word)
 }
 
@@ -29,15 +33,14 @@ pub fn parse_csv(csv: &str) -> Result<Vec<Word>, ParseIntError> {
         .collect()
 }
 
-use std::fmt;
-use std::error::Error as StdError;
-
 impl fmt::Display for ExecuteError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ExecuteError::OutputError => f.write_str("OutputError"),
+            ExecuteError::InputError => f.write_str("InputError"),
             ExecuteError::InputRequired => f.write_str("InputRequired"),
             ExecuteError::NoProgress => f.write_str("NoProgress"),
+            ExecuteError::ExecutionLimitReached => f.write_str("ExecutionLimitReached"),
             ExecuteError::UnrecognisedOpcode(op) => write!(f, "UnrecognisedOpcode({})", op),
         }
     }
@@ -46,8 +49,10 @@ impl StdError for ExecuteError {
     fn description(&self) -> &str {
         match *self {
             ExecuteError::OutputError => "Output Error",
+            ExecuteError::InputError => "Input Error",
             ExecuteError::InputRequired => "Input Required",
             ExecuteError::NoProgress => "No Progress",
+            ExecuteError::ExecutionLimitReached => "Execution Limit Reached",
             ExecuteError::UnrecognisedOpcode(_) => "Unrecognised Opcode",
         }
     }
@@ -66,21 +71,26 @@ impl Machine {
         input_write, output_read)
     }
 
-    pub fn execute(&mut self) -> Result<(), ExecuteError> {
+    pub fn execute(&mut self, limit: u32) -> Result<(), ExecuteError> {
+        let mut lim = limit;
         loop {
+            if lim == 0 {
+                return Err(ExecuteError::ExecutionLimitReached);
+            }
             match Operation::decode(self.memory.borrow(), self.pc) {
                 Err(op) => return Err(ExecuteError::UnrecognisedOpcode(op)),
                 Ok(op) => {
                     match self.step(op) {
                         Ok(StepResult::Executed) => (),
                         Ok(StepResult::Halt) => return Ok(()),
+                        Err(StepError::InputError) => return Err(ExecuteError::InputError),
                         Err(StepError::InputRequired) => return Err(ExecuteError::InputRequired),
                         Err(StepError::OutputError) => return Err(ExecuteError::OutputError),
                         Err(StepError::NoProgress) => return Err(ExecuteError::NoProgress)
                     }
                 },
             }
-
+            lim -= 1;
         }
     }
 
@@ -97,16 +107,19 @@ impl Machine {
                 self.pc += oplen;
             },
             Input(out) => {
-                let readval = self.input.recv();
+                let readval = self.input.try_recv();
                 match readval {
                     Ok(rslt) => out.write(memory, rslt),
-                    Err(_) => {
+                    Err(a) => {
                         if self.waiting_input {
                             return Err(StepError::NoProgress)
                         }
-                        else {
+                        else if let TryRecvError::Empty = a {
                             self.waiting_input = true;
                             return Err(StepError::InputRequired)
+                        }
+                        else {
+                            return Err(StepError::InputError)
                         }
                     }
                 }
@@ -172,6 +185,7 @@ enum StepResult {
 }
 enum StepError {
     InputRequired,
+    InputError,
     OutputError,
     NoProgress
 }
@@ -300,6 +314,7 @@ impl Operation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ExecuteError::ExecutionLimitReached;
 
     #[test]
     fn test_program() {
@@ -309,23 +324,32 @@ mod tests {
         {
             let (mut machine_7, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(7).unwrap();
-            assert_eq!(Ok(()), machine_7.execute());
+            assert_eq!(Ok(()), machine_7.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![999], vals);
         }
         {
             let (mut machine_8, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(8).unwrap();
-            assert_eq!(Ok(()), machine_8.execute());
+            assert_eq!(Ok(()), machine_8.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![1000], vals);
         }
         {
             let (mut machine_9, input_write, out_read) = Machine::new(memory.to_vec());
             input_write.send(9).unwrap();
-            assert_eq!(Ok(()), machine_9.execute());
+            assert_eq!(Ok(()), machine_9.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![1001], vals);
         }
+    }
+
+    #[test]
+    fn test_infinite_loop() {
+        let input_mem = "1106,0,0";
+        let memory = parse_csv(input_mem).unwrap();
+
+        let (mut machine, _, _) = Machine::new(memory);
+        assert_eq!(Err(ExecutionLimitReached), machine.execute(10));
     }
 }
