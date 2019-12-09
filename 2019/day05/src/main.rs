@@ -4,9 +4,7 @@ use int_code::*;
 
 fn main() {
     let input_mem = include_str!("memory.txt");
-    let memory = input_mem.split(',')
-        .map(|x| x.parse::<Word>().unwrap())
-        .collect::<Vec<_>>();
+    let memory = parse_csv(input_mem).unwrap();
 
     {
         let (mut machine_1, input_write, output_read) = Machine::new(memory.to_vec());

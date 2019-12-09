@@ -1,6 +1,11 @@
 
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
+use crate::Parameter::*;
+use crate::Operation::*;
+use std::borrow::{BorrowMut, Borrow};
+use std::num::ParseIntError;
+
 
 pub type Word = i64;
 pub struct Machine {
@@ -14,6 +19,12 @@ pub struct Machine {
 pub enum ExecuteError {
     InputRequired,
     OutputError,
+}
+
+pub fn parse_csv(csv: &str) -> Result<Vec<Word>, ParseIntError> {
+    csv.split(',')
+        .map(|x| x.parse::<Word>())
+        .collect()
 }
 
 use std::fmt;
@@ -144,10 +155,6 @@ enum Parameter {
     Position(usize)
 }
 
-use crate::Parameter::*;
-use crate::Operation::*;
-use std::borrow::{BorrowMut, Borrow};
-
 impl Parameter {
     fn read(&self, memory: &[Word]) -> Word {
         match self {
@@ -268,9 +275,7 @@ mod tests {
     #[test]
     fn test_program() {
         let input_mem = "3,21,1008,21,8,20,1005,20,22,107,8,21,20,1006,20,31,1106,0,36,98,0,0,1002,21,125,20,4,20,1105,1,46,104,999,1105,1,46,1101,1000,1,20,4,20,1105,1,46,98,99";
-        let memory = input_mem.split(',')
-            .map(|x| x.parse::<Word>().unwrap())
-            .collect::<Vec<_>>();
+        let memory = parse_csv(input_mem).unwrap();
 
         {
             let (mut machine_7, input_write, out_read) = Machine::new(memory.to_vec());
