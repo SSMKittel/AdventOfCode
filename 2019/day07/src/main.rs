@@ -64,28 +64,28 @@ impl AmpBank {
                   phase1: Word, phase2: Word,
                   phase3: Word, phase4: Word,
                   phase5: Word) -> AmpBank {
-        let (input, input_1): (Sender<Word>, Receiver<Word>) = channel();
-        let (output_1, input_2): (Sender<Word>, Receiver<Word>) = channel();
-        let (output_2, input_3): (Sender<Word>, Receiver<Word>) = channel();
-        let (output_3, input_4): (Sender<Word>, Receiver<Word>) = channel();
-        let (output_4, input_5): (Sender<Word>, Receiver<Word>) = channel();
-        let (output_5, output): (Sender<Word>, Receiver<Word>) = channel();
+        let (input_1_source, input_1_read): (Sender<Word>, Receiver<Word>) = channel();
+        let (input_2_source, input_2_read): (Sender<Word>, Receiver<Word>) = channel();
+        let (input_3_source, input_3_read): (Sender<Word>, Receiver<Word>) = channel();
+        let (input_4_source, input_4_read): (Sender<Word>, Receiver<Word>) = channel();
+        let (input_5_source, input_5_read): (Sender<Word>, Receiver<Word>) = channel();
+        let (output_source, output): (Sender<Word>, Receiver<Word>) = channel();
 
-        input.send(phase1).unwrap();
-        output_1.send(phase2).unwrap();
-        output_2.send(phase3).unwrap();
-        output_3.send(phase4).unwrap();
-        output_4.send(phase5).unwrap();
+        input_1_source.send(phase1).unwrap();
+        input_2_source.send(phase2).unwrap();
+        input_3_source.send(phase3).unwrap();
+        input_4_source.send(phase4).unwrap();
+        input_5_source.send(phase5).unwrap();
 
         AmpBank {
             amps: [
-                Machine::with_channels(memory.clone(), input_1, output_1),
-                Machine::with_channels(memory.clone(), input_2, output_2),
-                Machine::with_channels(memory.clone(), input_3, output_3),
-                Machine::with_channels(memory.clone(), input_4, output_4),
-                Machine::with_channels(memory, input_5, output_5)
+                Machine::with_channels(&memory, input_1_read, input_2_source),
+                Machine::with_channels(&memory, input_2_read, input_3_source),
+                Machine::with_channels(&memory, input_3_read, input_4_source),
+                Machine::with_channels(&memory, input_4_read, input_5_source),
+                Machine::with_channels(&memory, input_5_read, output_source)
             ],
-            input,
+            input: input_1_source,
             output
         }
     }

@@ -7,14 +7,14 @@ fn main() {
     let memory = parse_csv(input_mem).unwrap();
 
     {
-        let (mut machine_1, input_write, output_read) = Machine::new(memory.to_vec());
+        let (mut machine_1, input_write, output_read) = Machine::new(&memory);
         input_write.send(1).unwrap();
         machine_1.execute(1000).unwrap();
         let output = output_read.try_iter().collect::<Vec<_>>();
         println!("System 1: {:?}", output);
     }
     {
-        let (mut machine_5, input_write, output_read) = Machine::new(memory.to_vec());
+        let (mut machine_5, input_write, output_read) = Machine::new(&memory);
         input_write.send(5).unwrap();
         machine_5.execute(1000).unwrap();
         let output = output_read.try_iter().collect::<Vec<_>>();

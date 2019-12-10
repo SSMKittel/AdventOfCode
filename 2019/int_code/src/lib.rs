@@ -8,6 +8,7 @@ use std::fmt;
 use std::error::Error as StdError;
 use std::sync::mpsc::TryRecvError;
 use std::convert::TryInto;
+use std::collections::HashMap;
 
 pub type Word = i64;
 pub struct Machine {
@@ -19,55 +20,66 @@ pub struct Machine {
 }
 
 struct Memory {
-    memory: Vec<Word>
+    memory: HashMap<usize, Box<[Word; 1024]>>
 }
 struct AccessViolation(Word);
 
 impl Memory {
+    fn new(init: &[Word]) -> Memory {
+        let mut m = Memory{ memory: HashMap::with_capacity((init.len() + 1023) / 1024) };
+        let mut i = 0;
+        for chunk in init.chunks(1024) {
+            let mut tmp = Box::new([0; 1024]);
+            tmp[..chunk.len()].copy_from_slice(chunk);
+            if m.memory.insert(i, tmp).is_some() {
+                panic!("Overwrote memory on initialisation");
+            }
+            i += 1;
+        }
+        m
+    }
+
     fn read(&self, address: Parameter) -> Result<Word, AccessViolation> {
         match address {
             Immediate(val) => Ok(val),
             Position(addr) => {
-                Ok(self.memory[Memory::usize_checked(addr, self.memory.len())?])
+                let (chunk_id, sub_chunk_index) = Memory::address(addr)?;
+                match self.memory.get(&chunk_id) {
+                    None => Ok(0),
+                    Some(chunk) => Ok(chunk[sub_chunk_index]),
+                }
             }
         }
     }
-    fn read_position(&self, address: Word) -> Result<Word, AccessViolation> {
-        Ok(self.memory[Memory::usize_checked(address, self.memory.len())?])
-    }
-    fn write(&mut self, address: Parameter, new_val: Word) -> Result<(), AccessViolation> {
-        let direct_addr: Word;
-
-        match address {
-            Immediate(da) => {
-                direct_addr = da;
-            },
-            Position(ia) => {
-                direct_addr = self.memory[Memory::usize_checked(ia, self.memory.len())?];
-            }
+    fn read_position(&self, addr: Word) -> Result<Word, AccessViolation> {
+        let (chunk_id, sub_chunk_index) = Memory::address(addr)?;
+        match self.memory.get(&chunk_id) {
+            None => Ok(0),
+            Some(chunk) => Ok(chunk[sub_chunk_index]),
         }
+    }
+    fn write(&mut self, OutputParameter(addr): OutputParameter, new_val: Word) -> Result<(), AccessViolation> {
+        let (chunk_id, sub_chunk_index) = Memory::address(addr)?;
 
-        let true_addr = Memory::usize_checked(direct_addr, self.memory.len())?;
-        self.memory[true_addr] = new_val;
+        self.get_chunk_mut(chunk_id)[sub_chunk_index] = new_val;
         Ok(())
     }
 
-    fn usize_checked(addr: Word, max_value: usize) -> Result<usize, AccessViolation> {
+    fn get_chunk_mut(&mut self, chunk_id: usize) -> &mut Box<[Word; 1024]> {
+        self.memory
+            .entry(chunk_id)
+            .or_insert_with(|| Box::new([0; 1024]))
+    }
+
+    fn address(addr: Word) -> Result<(usize, usize), AccessViolation> {
         if addr < 0 {
             return Err(AccessViolation(addr));
         }
-        match addr.try_into() {
-            Ok(addr_u) => {
-                if addr_u >= max_value {
-                    Err(AccessViolation(addr))
-                }
-                else {
-                    Ok(addr_u)
-                }
-            },
+        let rslt: Result<usize, _> = addr.try_into();
+        match rslt {
+            Ok(addr_u) => Ok((addr_u / 1024, addr_u % 1024)),
             Err(_) => Err(AccessViolation(addr))
         }
-
     }
 }
 
@@ -77,6 +89,7 @@ pub enum ExecuteError {
     InputError,
     OutputError,
     NoProgress,
+    ArithmeticOverflow,
     ExecutionLimitReached,
     UnrecognisedOpcode(Word),
     MemoryAccessViolation(Word)
@@ -95,6 +108,7 @@ impl fmt::Display for ExecuteError {
             ExecuteError::InputError => f.write_str("InputError"),
             ExecuteError::InputRequired => f.write_str("InputRequired"),
             ExecuteError::NoProgress => f.write_str("NoProgress"),
+            ExecuteError::ArithmeticOverflow => f.write_str("ArithmeticOverflow"),
             ExecuteError::ExecutionLimitReached => f.write_str("ExecutionLimitReached"),
             ExecuteError::MemoryAccessViolation(address) => write!(f, "MemoryAccessViolation({})", address),
             ExecuteError::UnrecognisedOpcode(op) => write!(f, "UnrecognisedOpcode({})", op),
@@ -108,6 +122,7 @@ impl StdError for ExecuteError {
             ExecuteError::InputError => "Input Error",
             ExecuteError::InputRequired => "Input Required",
             ExecuteError::NoProgress => "No Progress",
+            ExecuteError::ArithmeticOverflow => "Arithmetic Overflow",
             ExecuteError::ExecutionLimitReached => "Execution Limit Reached",
             ExecuteError::MemoryAccessViolation(_) => "Memory Access Violation",
             ExecuteError::UnrecognisedOpcode(_) => "Unrecognised Opcode",
@@ -116,15 +131,15 @@ impl StdError for ExecuteError {
 }
 
 impl Machine {
-    pub fn with_channels(memory: Vec<Word>, input: Receiver<Word>, output: Sender<Word>) -> Machine {
-        Machine{ memory: Memory{memory}, pc: 0, input, output, waiting_input: false }
+    pub fn with_channels(memory: &[Word], input: Receiver<Word>, output: Sender<Word>) -> Machine {
+        Machine{ memory: Memory::new(memory), pc: 0, input, output, waiting_input: false }
     }
 
-    pub fn new(memory: Vec<Word>) -> (Machine, Sender<Word>, Receiver<Word>) {
+    pub fn new(memory: &[Word]) -> (Machine, Sender<Word>, Receiver<Word>) {
         let (input_write, input): (Sender<Word>, Receiver<Word>) = channel();
         let (output, output_read): (Sender<Word>, Receiver<Word>) = channel();
 
-        (Machine{ memory: Memory{memory}, pc: 0, input, output, waiting_input: false },
+        (Machine{ memory: Memory::new(memory), pc: 0, input, output, waiting_input: false },
         input_write, output_read)
     }
 
@@ -148,11 +163,15 @@ impl Machine {
         let memory = self.memory.borrow_mut();
         match op {
             Add(a, b, out) => {
-                memory.write(out, memory.read(a)? + memory.read(b)?)?;
+                let a_val = memory.read(a)?;
+                let b_val = memory.read(b)?;
+                memory.write(out, a_val.checked_add(b_val).ok_or(StepError::ArithmeticOverflow)?)?;
                 self.pc += 4;
             },
             Multiply(a, b, out) => {
-                memory.write(out, memory.read(a)? * memory.read(b)?)?;
+                let a_val = memory.read(a)?;
+                let b_val = memory.read(b)?;
+                memory.write(out, a_val.checked_mul(b_val).ok_or(StepError::ArithmeticOverflow)?)?;
                 self.pc += 4;
             },
             Input(out) => {
@@ -249,24 +268,25 @@ enum StepError {
     InputError,
     OutputError,
     NoProgress,
+    ArithmeticOverflow,
     MemoryAccessViolation(Word)
 }
 
-
+struct OutputParameter(Word);
 enum Parameter {
     Immediate(Word),
     Position(Word)
 }
 
 enum Operation {
-    Add(Parameter, Parameter, Parameter),
-    Multiply(Parameter, Parameter, Parameter),
-    Input(Parameter),
+    Add(Parameter, Parameter, OutputParameter),
+    Multiply(Parameter, Parameter, OutputParameter),
+    Input(OutputParameter),
     Output(Parameter),
     JumpIfTrue(Parameter, Parameter),
     JumpIfFalse(Parameter, Parameter),
-    LessThan(Parameter, Parameter, Parameter),
-    Equals(Parameter, Parameter, Parameter),
+    LessThan(Parameter, Parameter, OutputParameter),
+    Equals(Parameter, Parameter, OutputParameter),
     Halt
 }
 
@@ -287,6 +307,7 @@ impl From<StepError> for ExecuteError {
     fn from(a: StepError) -> Self {
         match a {
             StepError::MemoryAccessViolation(addr) => ExecuteError::MemoryAccessViolation(addr),
+            StepError::ArithmeticOverflow => ExecuteError::ArithmeticOverflow,
             StepError::InputError => ExecuteError::InputError,
             StepError::InputRequired => ExecuteError::InputRequired,
             StepError::OutputError => ExecuteError::OutputError,
@@ -302,19 +323,21 @@ impl Operation {
         let params = full_opcode / 100;
         match opcode {
             1 | 2 | 7 | 8 => {
+                let pos1 = memory.read_position(pc + 1)?;
+                let pos2 = memory.read_position(pc + 2)?;
+                let pos3 = memory.read_position(pc + 3)?;
                 let p1 = match params % 10 {
-                    0 => Position (memory.read_position(pc + 1)?),
-                    1 => Immediate(memory.read_position(pc + 1)?),
+                    0 => Position (pos1),
+                    1 => Immediate(pos1),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let p2 = match (params / 10) % 10 {
-                    0 => Position (memory.read_position(pc + 2)?),
-                    1 => Immediate(memory.read_position(pc + 2)?),
+                    0 => Position (pos2),
+                    1 => Immediate(pos2),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let pout = match params / 100 {
-                    0 => Immediate(memory.read_position(pc + 3)?),
-                    1 => Position (memory.read_position(pc + 3)?),
+                    0 => OutputParameter(pos3),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 match opcode {
@@ -326,28 +349,31 @@ impl Operation {
                 }
             },
             3 => {
+                let pos1 = memory.read_position(pc + 1)?;
                 match params {
-                    0 => Ok(Input(Immediate(memory.read_position(pc + 1)?))),
-                    1 => Ok(Input(Position (memory.read_position(pc + 1)?))),
+                    0 => Ok(Input(OutputParameter(pos1))),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             4 => {
+                let pos1 = memory.read_position(pc + 1)?;
                 match params {
-                    0 => Ok(Output(Position (memory.read_position(pc + 1)?))),
-                    1 => Ok(Output(Immediate(memory.read_position(pc + 1)?))),
+                    0 => Ok(Output(Position (pos1))),
+                    1 => Ok(Output(Immediate(pos1))),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 }
             },
             5 | 6 => {
+                let pos1 = memory.read_position(pc + 1)?;
+                let pos2 = memory.read_position(pc + 2)?;
                 let p1 = match params % 10 {
-                    0 => Position (memory.read_position(pc + 1)?),
-                    1 => Immediate(memory.read_position(pc + 1)?),
+                    0 => Position (pos1),
+                    1 => Immediate(pos1),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 let p2 = match (params / 10) % 10 {
-                    0 => Position (memory.read_position(pc + 2)?),
-                    1 => Immediate(memory.read_position(pc + 2)?),
+                    0 => Position (pos2),
+                    1 => Immediate(pos2),
                     _ => return Err(DecodeError::InvalidOpcode(full_opcode))
                 };
                 match opcode {
@@ -380,21 +406,21 @@ mod tests {
         let memory = parse_csv(input_mem).unwrap();
 
         {
-            let (mut machine_7, input_write, out_read) = Machine::new(memory.to_vec());
+            let (mut machine_7, input_write, out_read) = Machine::new(&memory);
             input_write.send(7).unwrap();
             assert_eq!(Ok(()), machine_7.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![999], vals);
         }
         {
-            let (mut machine_8, input_write, out_read) = Machine::new(memory.to_vec());
+            let (mut machine_8, input_write, out_read) = Machine::new(&memory);
             input_write.send(8).unwrap();
             assert_eq!(Ok(()), machine_8.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
             assert_eq!(vec![1000], vals);
         }
         {
-            let (mut machine_9, input_write, out_read) = Machine::new(memory.to_vec());
+            let (mut machine_9, input_write, out_read) = Machine::new(&memory);
             input_write.send(9).unwrap();
             assert_eq!(Ok(()), machine_9.execute(1000));
             let vals = out_read.try_iter().collect::<Vec<_>>();
@@ -407,7 +433,7 @@ mod tests {
         let input_mem = "1106,0,0";
         let memory = parse_csv(input_mem).unwrap();
 
-        let (mut machine, _, _) = Machine::new(memory);
+        let (mut machine, _, _) = Machine::new(&memory);
         assert_eq!(Err(ExecutionLimitReached), machine.execute(10));
     }
 
@@ -416,13 +442,13 @@ mod tests {
         let input_mem = "3,2,0";
         let memory = parse_csv(input_mem).unwrap();
 
-        let (mut machine, _inp, _) = Machine::new(memory.clone());
+        let (mut machine, _inp, _) = Machine::new(&memory);
         assert_eq!(Err(InputRequired), machine.execute(10));
         // If input is still required on a second call, but it is still not available,
         // we expect a NoProgress error as the machine was unable to do any work
         assert_eq!(Err(NoProgress), machine.execute(10));
 
-        let (mut machine, _, _) = Machine::new(memory);
+        let (mut machine, _, _) = Machine::new(&memory);
         // use of _ parameter for input-source causes it to be released, and the corresponding receiver to be closed
         // Complete failure when trying to get input
         assert_eq!(Err(InputError), machine.execute(10));
@@ -433,47 +459,31 @@ mod tests {
         let input_mem = "104,1,99";
         let memory = parse_csv(input_mem).unwrap();
 
-        let (mut machine, _, out) = Machine::new(memory.clone());
+        let (mut machine, _, out) = Machine::new(&memory);
         assert_eq!(Ok(()), machine.execute(10));
         assert_eq!(vec![1], out.try_iter().collect::<Vec<Word>>());
 
-        let (mut machine, _, _) = Machine::new(memory);
+        let (mut machine, _, _) = Machine::new(&memory);
         // use of _ parameter for output-target causes it to be released, and the corresponding sender to be closed
         // Complete failure when trying to write output
         assert_eq!(Err(OutputError), machine.execute(10));
     }
 
     #[test]
-    fn test_pc_access_violation() {
+    fn test_read_past_end() {
         let input_mem = "1,0,0,0";
         let memory = parse_csv(input_mem).unwrap();
 
-        let (mut machine, _, _) = Machine::new(memory.clone());
-        assert_eq!(Err(ExecuteError::MemoryAccessViolation(4)), machine.execute(10));
+        let (mut machine, _, _) = Machine::new(&memory);
+        assert_eq!(Err(ExecuteError::UnrecognisedOpcode(0)), machine.execute(10));
     }
 
     #[test]
-    fn test_pc_access_violation_1() {
-        let input_mem = "1";
+    fn test_pc_access_violation() {
+        let input_mem = "1,0,0,-1";
         let memory = parse_csv(input_mem).unwrap();
 
-        let (mut machine, _, _) = Machine::new(memory.clone());
-        assert_eq!(Err(ExecuteError::MemoryAccessViolation(1)), machine.execute(10));
-    }
-    #[test]
-    fn test_pc_access_violation_2() {
-        let input_mem = "1,0";
-        let memory = parse_csv(input_mem).unwrap();
-
-        let (mut machine, _, _) = Machine::new(memory.clone());
-        assert_eq!(Err(ExecuteError::MemoryAccessViolation(2)), machine.execute(10));
-    }
-    #[test]
-    fn test_pc_access_violation_3() {
-        let input_mem = "1,0,0";
-        let memory = parse_csv(input_mem).unwrap();
-
-        let (mut machine, _, _) = Machine::new(memory.clone());
-        assert_eq!(Err(ExecuteError::MemoryAccessViolation(3)), machine.execute(10));
+        let (mut machine, _, _) = Machine::new(&memory);
+        assert_eq!(Err(ExecuteError::MemoryAccessViolation(-1)), machine.execute(10));
     }
 }
