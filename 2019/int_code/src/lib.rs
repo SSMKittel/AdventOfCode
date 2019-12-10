@@ -20,17 +20,20 @@ pub struct Machine {
     waiting_input: bool
 }
 
+const CHUNK_SIZE: usize = 1024;
+
 struct Memory {
-    memory: HashMap<usize, Box<[Word; 1024]>>
+    memory: HashMap<usize, Box<[Word; CHUNK_SIZE]>>
 }
 struct AccessViolation(Option<Word>, Word);
 
 impl Memory {
+
     fn new(init: &[Word]) -> Memory {
-        let mut m = Memory{ memory: HashMap::with_capacity((init.len() + 1023) / 1024) };
+        let mut m = Memory{ memory: HashMap::with_capacity((init.len() + CHUNK_SIZE - 1) / CHUNK_SIZE) };
         let mut i = 0;
-        for chunk in init.chunks(1024) {
-            let mut tmp = Box::new([0; 1024]);
+        for chunk in init.chunks(CHUNK_SIZE) {
+            let mut tmp = Box::new([0; CHUNK_SIZE]);
             tmp[..chunk.len()].copy_from_slice(chunk);
             if m.memory.insert(i, tmp).is_some() {
                 panic!("Overwrote memory on initialisation");
@@ -66,10 +69,10 @@ impl Memory {
         Ok(())
     }
 
-    fn get_chunk_mut(&mut self, chunk_id: usize) -> &mut Box<[Word; 1024]> {
+    fn get_chunk_mut(&mut self, chunk_id: usize) -> &mut Box<[Word; CHUNK_SIZE]> {
         self.memory
             .entry(chunk_id)
-            .or_insert_with(|| Box::new([0; 1024]))
+            .or_insert_with(|| Box::new([0; CHUNK_SIZE]))
     }
 
     fn address(relative_base: Option<Word>, addr: Word) -> Result<(usize, usize), AccessViolation> {
@@ -79,7 +82,7 @@ impl Memory {
             }
             let rslt: Result<usize, _> = addr.try_into();
             match rslt {
-                Ok(addr_u) => Ok((addr_u / 1024, addr_u % 1024)),
+                Ok(addr_u) => Ok((addr_u / CHUNK_SIZE, addr_u % CHUNK_SIZE)),
                 Err(_) => Err(AccessViolation(relative_base, addr))
             }
         }
