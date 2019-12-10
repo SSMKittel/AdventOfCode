@@ -64,8 +64,8 @@ impl AsteroidField {
 
     fn build_moves(&mut self) {
         self.moves.clear();
-        for x in 0..=(self.width / 2) {
-            for y in 0..=(self.height / 2) {
+        for x in 0..self.width {
+            for y in 0..self.height {
                 if x == 0 && y == 0 {
                     continue;
                 }
