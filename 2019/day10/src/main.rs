@@ -1,5 +1,6 @@
 use std::ops::Index;
 use std::convert::TryInto;
+use std::cmp::Ordering;
 
 fn main() {
     let input = include_str!("input.txt");
@@ -45,10 +46,92 @@ struct AsteroidField {
     moves: Vec<Move>
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
-struct Move(i32, i32);
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
-struct Point(i32, i32);
+struct Move{x: i32, y: i32}
+
+impl Ord for Move {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let quadrant = self.quadrant();
+        match quadrant.cmp(&other.quadrant()) {
+            Ordering::Equal => {},
+            a => return a,
+        }
+        let c = self.abs().slope_ord().cmp(&other.abs().slope_ord());
+        if c == Ordering::Equal {
+            return self.sq_len().cmp(&other.sq_len());
+        }
+
+        if quadrant == 2 || quadrant == 4 {
+            c.reverse()
+        }
+        else {
+            c
+        }
+    }
+}
+impl PartialOrd for Move {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Move {
+    fn canonical(self) -> Move {
+        let d = gcd(self.x, self.y);
+        if d <= 1 {
+            self
+        }
+        else {
+            Move{x: self.x / d, y: self.y / d}
+        }
+    }
+
+    fn sq_len(self) -> usize {
+        let xx = (self.x as i64 * self.x as i64) as usize;
+        let yy = (self.y as i64 * self.y as i64) as usize;
+        xx + yy
+    }
+
+    // Only valid with non-negative Move
+    fn slope_ord(self) -> i64 {
+        if self.x == 0 {
+            std::i64::MIN
+        }
+        else {
+            let x: i64 = self.x as i64;
+            let y: i64 = self.y as i64;
+            -1000000 * y / x
+        }
+    }
+
+    fn abs(self) -> Move {
+        Move{x: self.x.abs(), y: self.y.abs()}
+    }
+
+    fn quadrant(self) -> i32 {
+        // Invert y-axis
+        let y = -1 * self.y;
+        if self.x >= 0 {
+            if y >= 0 {
+                1
+            }
+            else {
+                2
+            }
+        }
+        else {
+            if y >= 0 {
+                4
+            }
+            else {
+                3
+            }
+        }
+    }
+}
+
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+struct Point{x: i32, y: i32}
 
 impl AsteroidField {
     fn new(world: &Vec<Vec<Space>>) -> AsteroidField {
@@ -70,10 +153,10 @@ impl AsteroidField {
                     continue;
                 }
                 // We could simplify this by dividing both params by prime p when x & y are wholly divisible by p
-                self.moves.push(Move(x, y));
-                self.moves.push(Move(-x, y));
-                self.moves.push(Move(x, -y));
-                self.moves.push(Move(-x, -y));
+                self.moves.push(Move{x, y}.canonical());
+                self.moves.push(Move{x: -x, y}.canonical());
+                self.moves.push(Move{x, y: -y}.canonical());
+                self.moves.push(Move{x: -x, y: -y}.canonical());
             }
         }
         self.moves.sort();
@@ -81,15 +164,15 @@ impl AsteroidField {
     }
 
     fn contains(&self, p: &Point) -> bool {
-        p.0 >= 0 && p.1 >= 0
-        && p.0 < self.width && p.1 < self.height
+        p.x >= 0 && p.y >= 0
+        && p.x < self.width && p.y < self.height
     }
 
     fn locate_station(&self) -> (Point, usize) {
         let mut stations = Vec::<(Point, usize)>::with_capacity(self.width as usize * self.height as usize);
         for x in 0..self.width {
             for y in 0..self.height {
-                let station = Point(x, y);
+                let station = Point{x, y};
                 stations.push((station, self.view_count(station)))
             }
         }
@@ -112,7 +195,7 @@ impl AsteroidField {
             let mut look = station;
             let mut blocking = false;
             loop {
-                look = Point(look.0 + m.0, look.1 + m.1);
+                look = Point{x: look.x + m.x, y: look.y + m.y};
                 match self.to_index(&look) {
                     Some(idx) => {
                         if self.field[idx] == Space::Asteroid {
@@ -135,7 +218,7 @@ impl AsteroidField {
 
     fn to_index(&self, p: &Point) -> Option<usize> {
         if self.contains(p) {
-            let pos = p.1 * self.width + p.0;
+            let pos = p.y * self.width + p.x;
             let pos: usize = pos.try_into().unwrap();
             Some(pos)
         }
@@ -154,9 +237,56 @@ impl Index<Point> for AsteroidField {
     }
 }
 
+fn gcd(a: i32, b: i32) -> i32 {
+    fn gcd_inner(a: i32, b: i32) -> i32 {
+        match a.cmp(&b) {
+            Ordering::Equal => a,
+            Ordering::Greater => gcd(a - b, b),
+            Ordering::Less => gcd(a, b - a),
+        }
+    }
+    if a == 0 {
+        b.abs()
+    }
+    else if b == 0 {
+        a.abs()
+    }
+    else {
+        gcd_inner(a.abs(), b.abs())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test] fn test_gcd_107_79() { assert_eq!(1, gcd(107, 79)); }
+    #[test] fn test_gcd_n107_79() { assert_eq!(1, gcd(-107, 79)); }
+    #[test] fn test_gcd_107_n79() { assert_eq!(1, gcd(107, -79)); }
+    #[test] fn test_gcd_n107_n79() { assert_eq!(1, gcd(-107, -79)); }
+    #[test] fn test_gcd_79_107() { assert_eq!(1, gcd(79, 107)); }
+    #[test] fn test_gcd_n79_107() { assert_eq!(1, gcd(-79, 107)); }
+    #[test] fn test_gcd_79_n107() { assert_eq!(1, gcd(79, -107)); }
+    #[test] fn test_gcd_n79_n107() { assert_eq!(1, gcd(-79, -107)); }
+    #[test] fn test_gcd_32_48() { assert_eq!(16, gcd(32, 48)); }
+    #[test] fn test_gcd_32_n48() { assert_eq!(16, gcd(32, -48)); }
+    #[test] fn test_gcd_n32_48() { assert_eq!(16, gcd(-32, 48)); }
+    #[test] fn test_gcd_n32_n48() { assert_eq!(16, gcd(-32, -48)); }
+    #[test] fn test_gcd_48_32() { assert_eq!(16, gcd(48, 32)); }
+    #[test] fn test_gcd_n48_32() { assert_eq!(16, gcd(-48, 32)); }
+    #[test] fn test_gcd_48_n32() { assert_eq!(16, gcd(48, -32)); }
+    #[test] fn test_gcd_n48_n32() { assert_eq!(16, gcd(-48, -32)); }
+    #[test] fn test_gcd_0_48() { assert_eq!(48, gcd(0, 48)); }
+    #[test] fn test_gcd_32_0() { assert_eq!(32, gcd(32, 0)); }
+    #[test] fn test_gcd_0_n48() { assert_eq!(48, gcd(0, -48)); }
+    #[test] fn test_gcd_n32_0() { assert_eq!(32, gcd(-32, 0)); }
+    #[test] fn test_gcd_0_0() { assert_eq!(0, gcd(0, 0)); }
+    #[test] fn test_gcd_0_1() { assert_eq!(1, gcd(0, 1)); }
+    #[test] fn test_gcd_1_0() { assert_eq!(1, gcd(1, 0)); }
+    #[test] fn test_gcd_1_1() { assert_eq!(1, gcd(1, 1)); }
+    #[test] fn test_gcd_0_n1() { assert_eq!(1, gcd(0, -1)); }
+    #[test] fn test_gcd_n1_0() { assert_eq!(1, gcd(-1, 0)); }
+    #[test] fn test_gcd_n1_n1() { assert_eq!(1, gcd(-1, -1)); }
 
     fn run_locate(expected: (Point, usize), input: &str) {
         let asteroid_field = input_to_field(input);
@@ -167,7 +297,7 @@ mod tests {
     #[test]
     fn test_1() {
         run_locate(
-            (Point(3, 4), 8),
+            (Point{x: 3, y: 4}, 8),
 ".#..#
 .....
 #####
@@ -178,7 +308,7 @@ mod tests {
     #[test]
     fn test_2() {
         run_locate(
-            (Point(5, 8), 33),
+            (Point{x: 5, y: 8}, 33),
 "......#.#.
 #..#.#....
 ..#######.
@@ -194,7 +324,7 @@ mod tests {
     #[test]
     fn test_3() {
         run_locate(
-            (Point(1, 2), 35),
+            (Point{x: 1, y: 2}, 35),
 "#.#...#.#.
 .###....#.
 .#....#...
@@ -210,7 +340,7 @@ mod tests {
     #[test]
     fn test_4() {
         run_locate(
-            (Point(6, 3), 41),
+            (Point{x: 6, y: 3}, 41),
 ".#..#..###
 ####.###.#
 ....###.#.
@@ -226,7 +356,7 @@ mod tests {
     #[test]
     fn test_5() {
         run_locate(
-            (Point(11, 13), 210),
+            (Point{x: 11, y: 13}, 210),
 ".#..##.###...#######
 ##.############..##.
 .#.######.########.#
