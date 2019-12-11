@@ -37,24 +37,18 @@ enum Space {
     Empty
 }
 
-#[derive(Eq, PartialEq, Debug, Clone, Copy)]
-enum Visibility {
-    Blocked,
-    Visible,
-    Empty
-}
-
 struct AsteroidField {
     width: i32,
     height: i32,
     field: Vec<Space>,
-    moves: Vec<Move>
+    scan_steps: Vec<ScanStep>
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
-struct Move{x: i32, y: i32}
+struct ScanStep{x: i32, y: i32}
 
-impl Ord for Move {
+impl Ord for ScanStep {
+    // Order all scan_steps in laser-order so we can just scan each scan_step in a loop
     fn cmp(&self, other: &Self) -> Ordering {
         let quadrant = self.quadrant();
         match quadrant.cmp(&other.quadrant()) {
@@ -74,20 +68,20 @@ impl Ord for Move {
         }
     }
 }
-impl PartialOrd for Move {
+impl PartialOrd for ScanStep {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Move {
-    fn canonical(self) -> Move {
+impl ScanStep {
+    fn canonical(self) -> ScanStep {
         let d = gcd(self.x, self.y);
         if d <= 1 {
             self
         }
         else {
-            Move{x: self.x / d, y: self.y / d}
+            ScanStep{x: self.x / d, y: self.y / d}
         }
     }
 
@@ -97,7 +91,7 @@ impl Move {
         xx + yy
     }
 
-    // Only valid with non-negative Move
+    // Only valid with non-negative ScanStep
     fn slope_ord(self) -> i64 {
         if self.x == 0 {
             std::i64::MIN
@@ -109,8 +103,8 @@ impl Move {
         }
     }
 
-    fn abs(self) -> Move {
-        Move{x: self.x.abs(), y: self.y.abs()}
+    fn abs(self) -> ScanStep {
+        ScanStep{x: self.x.abs(), y: self.y.abs()}
     }
 
     fn quadrant(self) -> i32 {
@@ -144,27 +138,29 @@ impl AsteroidField {
             width: world[0].len() as i32,
             height: world.len() as i32,
             field: world.clone().into_iter().flatten().collect(),
-            moves: vec![]
+            scan_steps: vec![]
         };
-        g.build_moves();
+        g.build_scan_steps();
         g
     }
 
-    fn build_moves(&mut self) {
-        self.moves.clear();
+    fn build_scan_steps(&mut self) {
+        self.scan_steps.clear();
+        self.scan_steps.reserve_exact((self.width * self.height * 4 - 4) as usize);
         for x in 0..self.width {
             for y in 0..self.height {
                 if x == 0 && y == 0 {
                     continue;
                 }
-                self.moves.push(Move{x, y}.canonical());
-                self.moves.push(Move{x: -x, y}.canonical());
-                self.moves.push(Move{x, y: -y}.canonical());
-                self.moves.push(Move{x: -x, y: -y}.canonical());
+                self.scan_steps.push(ScanStep{x, y}.canonical());
+                self.scan_steps.push(ScanStep{x: -x, y}.canonical());
+                self.scan_steps.push(ScanStep{x, y: -y}.canonical());
+                self.scan_steps.push(ScanStep{x: -x, y: -y}.canonical());
             }
         }
-        self.moves.sort();
-        self.moves.dedup();
+        self.scan_steps.sort();
+        self.scan_steps.dedup();
+        self.scan_steps.shrink_to_fit();
     }
 
     fn contains(&self, p: &Point) -> bool {
@@ -177,7 +173,9 @@ impl AsteroidField {
         for x in 0..self.width {
             for y in 0..self.height {
                 let station = Point{x, y};
-                stations.push((station, self.view_count(station)))
+                if self[station] != Space::Empty {
+                    stations.push((station, self.view_count(station)))
+                }
             }
         }
         stations.into_iter().max_by_key(|s| s.1).unwrap()
@@ -189,10 +187,10 @@ impl AsteroidField {
 
         loop {
             let mut found = false;
-            for &m in &self.moves {
+            for &ss in &self.scan_steps {
                 let mut look = station;
                 loop {
-                    look = Point { x: look.x + m.x, y: look.y + m.y };
+                    look = Point { x: look.x + ss.x, y: look.y + ss.y };
                     match self.to_index(&look) {
                         Some(idx) => {
                             if field[idx] == Space::Asteroid {
@@ -215,40 +213,24 @@ impl AsteroidField {
     }
 
     fn view_count(&self, station: Point) -> usize {
-        if let Space::Empty = self[station] {
-            return 0;
-        }
-
-        let mut vis = self.field.iter().map(|&s| match s {
-            Space::Asteroid => Visibility::Visible,
-            Space::Empty => Visibility::Empty,
-        }).collect::<Vec<_>>();
-
-        vis[self.to_index(&station).unwrap()] = Visibility::Blocked;
-
-        for &m in &self.moves {
+        let mut seen = 0;
+        for &ss in &self.scan_steps {
             let mut look = station;
-            let mut blocking = false;
             loop {
-                look = Point{x: look.x + m.x, y: look.y + m.y};
+                look = Point{x: look.x + ss.x, y: look.y + ss.y};
                 match self.to_index(&look) {
                     Some(idx) => {
                         if self.field[idx] == Space::Asteroid {
-                            if blocking {
-                                vis[idx] = Visibility::Blocked;
-                            }
-                            else {
-                                blocking = true;
-                            }
+                            seen += 1;
+                            break;
                         }
                     }
                     None => break
                 }
             }
         }
-        vis.into_iter()
-            .filter(|&x| x == Visibility::Visible)
-            .count()
+
+        seen
     }
 
     fn to_index(&self, p: &Point) -> Option<usize> {
