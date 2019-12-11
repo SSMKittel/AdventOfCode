@@ -8,6 +8,11 @@ fn main() {
     let g = AsteroidField::new(&asteroid_field);
     let station = g.locate_station();
     println!("{:?}", station);
+    let hitscan = g.scan_asteroids(station.0);
+    // println!("{:?}", hitscan);
+    let a200 = hitscan[200 - 1];
+    println!("200th: {:?}", a200);
+    println!("200th (value): {}", a200.x * 100 + a200.y);
 }
 
 fn input_to_field(input: &str) -> Vec<Vec<Space>> {
@@ -109,7 +114,7 @@ impl Move {
     }
 
     fn quadrant(self) -> i32 {
-        // Invert y-axis
+        // The field has positive y going down, so moving "up" is negative
         let y = -1 * self.y;
         if self.x >= 0 {
             if y >= 0 {
@@ -176,6 +181,37 @@ impl AsteroidField {
             }
         }
         stations.into_iter().max_by_key(|s| s.1).unwrap()
+    }
+
+    fn scan_asteroids(&self, station: Point) -> Vec<Point> {
+        let mut field = self.field.clone();
+        let mut asteroids = Vec::new();
+
+        loop {
+            let mut found = false;
+            for &m in &self.moves {
+                let mut look = station;
+                loop {
+                    look = Point { x: look.x + m.x, y: look.y + m.y };
+                    match self.to_index(&look) {
+                        Some(idx) => {
+                            if field[idx] == Space::Asteroid {
+                                asteroids.push(look);
+                                field[idx] = Space::Empty;
+                                found = true;
+                                break;
+                            }
+                        }
+                        None => break
+                    }
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+
+        asteroids
     }
 
     fn view_count(&self, station: Point) -> usize {
@@ -376,5 +412,33 @@ mod tests {
 .#.#.###########.###
 #.#.#.#####.####.###
 ###.##.####.##.#..##");
+    }
+
+    #[test]
+    fn test_200th() {
+        let asteroid_field = input_to_field(".#..##.###...#######
+##.############..##.
+.#.######.########.#
+.###.#######.####.#.
+#####.##.#.##.###.##
+..#####..#.#########
+####################
+#.####....###.#.#.##
+##.#################
+#####.##.###..####..
+..######..##.#######
+####.##.####...##..#
+.#####..#.######.###
+##...#.##########...
+#.##########.#######
+.####.#.###.###.#.##
+....##.##.###..#####
+.#.#.###########.###
+#.#.#.#####.####.###
+###.##.####.##.#..##");
+
+        let g = AsteroidField::new(&asteroid_field);
+        let hitscan = g.scan_asteroids(Point{x: 11, y: 13});
+        assert_eq!(Point{x: 8, y: 2}, hitscan[200 - 1]);
     }
 }
