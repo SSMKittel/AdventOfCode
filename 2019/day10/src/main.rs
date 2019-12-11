@@ -152,7 +152,6 @@ impl AsteroidField {
                 if x == 0 && y == 0 {
                     continue;
                 }
-                // We could simplify this by dividing both params by prime p when x & y are wholly divisible by p
                 self.moves.push(Move{x, y}.canonical());
                 self.moves.push(Move{x: -x, y}.canonical());
                 self.moves.push(Move{x, y: -y}.canonical());
