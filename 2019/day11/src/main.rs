@@ -5,16 +5,42 @@ use int_code::*;
 fn main() {
     let mem = parse_csv(include_str!("input.txt")).unwrap();
 
-    let painted = paint(&mem);
-
+    let painted = paint(&mem, Colour::Black);
     println!("Painted: {}", painted.len());
+
+    let registration = paint(&mem, Colour::White);
+    let min_x = registration.iter().map(|(&p, _)| p.x).min().unwrap();
+    let min_y = registration.iter().map(|(&p, _)| p.y).min().unwrap();
+    let max_x = registration.iter().map(|(&p, _)| p.x).max().unwrap();
+    let max_y = registration.iter().map(|(&p, _)| p.y).max().unwrap();
+
+    let width = (max_x - min_x + 1) as usize;
+    let height = (max_y - min_y + 1) as usize;
+    let mut p_reg = Vec::with_capacity(width * height);
+    for _ in 0..(width * height) {
+        p_reg.push(' ');
+    }
+
+    for (&p, &c) in registration.iter() {
+        let idx = (max_y - p.y) as usize * width + (p.x - min_x) as usize;
+        p_reg[idx] = match c {
+            Colour::Black => ' ',
+            Colour::White => '█',
+        }
+    }
+    for line in p_reg.chunks(width) {
+        let s: String = line.into_iter().collect();
+        println!("{}", s);
+    }
+    println!();
 }
 
-fn paint(init_mem: &Vec<Word>) -> HashMap<Point, Colour> {
+fn paint(init_mem: &Vec<Word>, init_colour: Colour) -> HashMap<Point, Colour> {
     let (mut machine, input, output) = Machine::new(init_mem);
     let mut direction = Direction::Up;
     let mut paints = HashMap::<Point, Colour>::new();
     let mut position = Point{x: 0, y: 0};
+    paints.insert(position, init_colour);
     loop {
         let mut halt = false;
 
